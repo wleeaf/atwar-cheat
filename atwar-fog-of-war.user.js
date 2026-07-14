@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         atWar Single-Player Fog-of-War Reveal + Free Movement
 // @namespace    atwar-cheat
-// @version      2.1
-// @description  Single-player-only: reveals full troop counts/composition on the map (patches the client-side view-range check) and removes the client-side "invalid route" gate so drags always commit (e.g. land units onto sea). Language-independent and works while spectating, not just as an active player.
+// @version      3.0
+// @description  Single-player-only: reveals full troop counts/composition on the map (patches the client-side view-range check) and removes the client-side "invalid route" gate so drags always commit (e.g. land units onto sea). Language-independent and fully works while spectating, not just as an active player.
 // @match        *://*.atwar-game.com/games/*
 // @match        *://atwar-game.com/games/*
 // @run-at       document-idle
@@ -29,6 +29,16 @@
     return null;
   }
 
+  function forceRevealTroopDirect(troop) {
+    if (!troop || !troop.Marker) return false;
+    try { troop.Marker.set_Count(troop.Count()); } catch (e) {}
+    try { troop.Marker.set_ShowCount(true); } catch (e) {}
+    try { troop.Marker.set_IsInvisible(false); } catch (e) {}
+    try { troop.set_ShowTroopMarkers(true); } catch (e) {}
+    troop.IsDetected = true;
+    return true;
+  }
+
   function revealFogOfWar(g) {
     const cp = g.CurrentPlayer();
 
@@ -39,6 +49,17 @@
         t.PixelDetectLandRange = () => HUGE;
         t.PixelDetectNavalRange = () => HUGE;
         t.PixelDetectAirRange = () => HUGE;
+      }
+    }
+
+    function revealTroop(troop) {
+      if (!troop) return;
+      if (cp) {
+        if (typeof troop.UpdateMarker === 'function') {
+          try { troop.UpdateMarker(); } catch (e) {}
+        }
+      } else {
+        forceRevealTroopDirect(troop);
       }
     }
 
@@ -56,9 +77,7 @@
           citiesRevealed++;
         }
         const troop = typeof city.CityTroop === 'function' ? city.CityTroop() : city.CityTroop;
-        if (troop && typeof troop.UpdateMarker === 'function') {
-          try { troop.UpdateMarker(); } catch (e) {}
-        }
+        revealTroop(troop);
         const owner = city.$owner;
         if (owner && owner.Id !== 0 && (!cp || owner.Id !== cp.Id)) owners.add(owner);
       }
@@ -68,9 +87,8 @@
     for (const owner of owners) {
       if (!Array.isArray(owner.Army)) continue;
       for (const t of owner.Army) {
-        if (typeof t.UpdateMarker === 'function') {
-          try { t.UpdateMarker(); troopsUpdated++; } catch (e) {}
-        }
+        revealTroop(t);
+        troopsUpdated++;
       }
     }
 
@@ -124,6 +142,28 @@
     return { patched: true, stripped };
   }
 
+  function wireSpectatorInteractions(g) {
+    if (g.CurrentPlayer()) return { wired: false };
+    if (g.MapHandler.__atwarInteractionsWired) return { wired: false };
+
+    g.Screen.TroopInfoTooltip.Hide();
+
+    g.MapHandler.add_TroopPointerEnter(function (troop) {
+      if (troop.Count() === 0 || g.Screen.MoveTroopMenu.IsVisible()) return;
+      g.Screen.TroopInfoTooltip.Show$3(troop);
+    });
+    g.MapHandler.add_TroopPointerLeave(function (troop) {
+      g.Screen.TroopInfoTooltip.Hide();
+    });
+    g.MapHandler.add_CityClicked(function (city) {
+      g.Screen.CityInfoMenu.SetCity(city);
+      g.Screen.CityInfoMenu.Show();
+    });
+
+    g.MapHandler.__atwarInteractionsWired = true;
+    return { wired: true };
+  }
+
   function tryInstall() {
     const g = findGame();
     if (!g) return false;
@@ -131,6 +171,7 @@
     window.__game = g;
     const result = revealFogOfWar(g);
     result.routeInvalidPatch = patchRouteInvalid(g);
+    result.spectatorInteractions = wireSpectatorInteractions(g);
 
     console.log('[atwar-cheat] fog-of-war reveal + free movement applied', result);
     return true;
